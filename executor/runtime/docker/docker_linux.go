@@ -20,6 +20,7 @@ import (
 
 	"github.com/Netflix/titus-executor/config"
 	runtimeTypes "github.com/Netflix/titus-executor/executor/runtime/types"
+	"github.com/coreos/go-systemd/sdjournal"
 	"github.com/coreos/go-systemd/v22/dbus"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/pkg/errors"
@@ -157,12 +158,30 @@ func setupSystemServices(parentCtx context.Context, c runtimeTypes.Container, cf
 			runtime = r
 		}
 		if err := startSystemdUnit(ctx, conn, c.TaskID(), c.ID(), runtime, *svc); err != nil {
+			tail := getSystemdUnitLogLastLine(ctx, c.TaskID(), *svc)
+			err = fmt.Errorf("%w: %s", err, tail)
 			logrus.WithError(err).Errorf("Error starting %s service", svc.UnitName)
 			return err
 		}
 	}
 
 	return nil
+}
+
+func getSystemdUnitLogLastLine(ctx context.Context, taskID string, opts runtimeTypes.ServiceOpts) string {
+	jconf := sdjournal.JournalReaderConfig{
+		Path:        "/var/log/journal/",
+		NumFromTail: 1,
+	}
+	jr, err := sdjournal.NewJournalReader(jconf)
+	if err != nil {
+		return err.Error()
+	}
+	data, err := ioutil.ReadAll(jr)
+	if err != nil {
+		return err.Error()
+	}
+	return string(data[:])
 }
 
 func runServiceInitCommand(ctx context.Context, log *logrus.Entry, cID string, runtime string, opts runtimeTypes.ServiceOpts) error {
@@ -206,12 +225,16 @@ func runServiceInitCommand(ctx context.Context, log *logrus.Entry, cID string, r
 	return nil
 }
 
-func startSystemdUnit(ctx context.Context, conn *dbus.Conn, taskID string, cID string, runtime string, opts runtimeTypes.ServiceOpts) error {
+func generateQualifiedUnitName(opts runtimeTypes.ServiceOpts, taskID string) string {
 	postFix := "service"
 	if opts.Target {
 		postFix = "target"
 	}
-	qualifiedUnitName := fmt.Sprintf("%s@%s.%s", opts.UnitName, taskID, postFix)
+	return fmt.Sprintf("%s@%s.%s", opts.UnitName, taskID, postFix)
+}
+
+func startSystemdUnit(ctx context.Context, conn *dbus.Conn, taskID string, cID string, runtime string, opts runtimeTypes.ServiceOpts) error {
+	qualifiedUnitName := generateQualifiedUnitName(opts, taskID)
 	l := logrus.WithFields(logrus.Fields{
 		"containerId": cID,
 		"taskID":      taskID,
