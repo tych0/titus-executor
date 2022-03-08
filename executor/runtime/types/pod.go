@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Netflix/titus-executor/api/netflix/titus"
+	"github.com/Netflix/titus-executor/config"
 	"github.com/Netflix/titus-executor/uploader"
 	vpcTypes "github.com/Netflix/titus-executor/vpc/types"
 	"github.com/golang/protobuf/proto" // nolint: staticcheck
@@ -27,41 +28,13 @@ type PodContainer struct {
 	titusInfo     *titus.ContainerInfo
 }
 
-func NewPodContainer(pod *corev1.Pod, ipv4Address *string) (*PodContainer, error) {
+func NewPodContainer(pod *corev1.Pod, cfg config.Config) (*PodContainer, error) {
 	if pod == nil {
 		return nil, errors.New("missing pod")
 	}
-	if ipv4Address == nil {
-		return nil, errors.New("missing ipv4 address")
-	}
 
 	c := &PodContainer{
-		ipv4Address: ipv4Address,
-		pod:         pod,
-	}
-	cInfo, err := extractContainerInfoFromPod(pod)
-	if err != nil {
-		return nil, err
-	}
-	c.titusInfo = cInfo
-
-	if val, ok := c.titusInfo.GetPassthroughAttributes()[hostnameStyleParam]; ok {
-		if err := validateHostnameStyle(val); err != nil {
-			return nil, err
-		}
-
-		c.hostnameStyle = val
-	}
-
-	entrypoint, command, err := parseEntryPointAndCommand(c.titusInfo)
-	if err != nil {
-		return nil, err
-	}
-	if entrypoint != nil {
-		c.entrypoint = entrypoint
-	}
-	if command != nil {
-		c.command = command
+		pod: pod,
 	}
 
 	return c, nil
