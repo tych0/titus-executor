@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <fcntl.h>
+#include <sys/mount.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -291,6 +292,14 @@ int do_execvp(char *const argv[], int new_stdout_fd, int new_stderr_fd,
 	unsetenv(TINI_HANDOFF);
 	unsetenv(TINI_UNSHARE);
 	unsetenv(TITUS_BATCH);
+
+	// unmount titus-executor-sockets so that people can't e.g. pass
+	// additional notify fds and get the seccomp sidecar to proxy syscalls
+	// they didn't originally have access to.
+	PRINT_INFO("Unmounting /titus-executor-sockets");
+	if (umount2("/titus-executor-sockets", 0) < 0)
+		PRINT_WARNING("Unable to umount executor sockets dir: %s",
+			      strerror(errno));
 
 	execvp(argv[0], argv);
 
