@@ -3,8 +3,10 @@ package reaper
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	docker "github.com/docker/docker/client"
 	"github.com/hashicorp/go-multierror"
+	"github.com/moby/sys/mountinfo"
 	"github.com/sirupsen/logrus"
 )
 
@@ -146,4 +149,101 @@ func processContainerJSON(ctx context.Context, container types.ContainerJSON, do
 	}).Debug("Processed container and found consistent state")
 
 	return nil
+}
+
+// there is a kernel bug described in:
+// https://lore.kernel.org/all/YrShFXRLtRt6T%2Fj+@risky/ where fuse can cause a
+// pidns exit to deadlock. They symptoms are:
+//
+//    1. pidns pid 1 in S (sleeping) state
+//    2. that pid has zap_pid_ns_processes() in its /proc/pid/stack
+//    3. some fuse mount exists, and one of the threads from that fuse mount is
+//       stuck in fuse_flush()
+//
+// if those conditions are true, we need to manually tear down the fuse
+// connection so the pidns can exit and docker doesn't get stuck. we can do
+// this by writing something to
+//
+// 	/sys/fs/fuse/connections/$dev_minor/abort
+//
+// where $dev_minor is the minor number from the fuse superblock mount.
+func checkIfFuseWedgedPidNs(pid int) {
+	if !kernelStackHas(pid, "zap_pid_ns_processes") {
+		return
+	}
+
+	// the kernel has already destroyed the mountinfo for the pidns' init,
+	// since it is pretty far along in do_exit(). we need to keep the tid
+	// of the fuse process around so we can inspect its mountinfo instead.
+	//
+	// ideally we'd use the pids cgroup (i.e. the docker API) here to
+	// figure out what tasks we should look at, but that *also* has been
+	// invalidated and is incorrect at this point. luckily for us the fuse
+	// daemon that's causing this hang in our production case is a child of
+	// init, so we can just look at that. as a bonus, this file outputs
+	// tids instead of pids, so we don't have to do any additional parsing.
+	targetTid := 0
+	for _, tid := range childThreadsOfPid(pid) {
+		if kernelStackHas(tid, "fuse_flush") {
+			targetTid = tid
+			break
+		}
+	}
+	if targetTid == 0 {
+		return
+	}
+
+	// walk the mountinfo for the container and get the superblock minor
+	// number. let's just manually kill any existing fuse thing, since the
+	// pid ns is dying anyway.
+	infos, err := mountinfo.PidMountInfo(targetTid)
+	if err != nil {
+		logrus.Errorf("failed getting mount info for %d: %v", targetTid, err)
+		return
+	}
+
+	for _, m := range infos {
+		if !strings.HasPrefix(m.FSType, "fuse") {
+			continue
+		}
+
+		err = ioutil.WriteFile(fmt.Sprintf("/sys/fs/fuse/connections/%d/abort", m.Minor), []byte("foo"), 0755)
+		if err != nil {
+			logrus.Errorf("failed killing fuse connection %d: %v", m.Minor, err)
+		}
+	}
+}
+
+func kernelStackHas(pid int, function string) bool {
+	content, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/stack", pid))
+	if err != nil {
+		logrus.Errorf("couldn't read kernel stack file for %d: %v", pid, err)
+		return false
+	}
+
+	// the format of this file has changed somewhat over time; here's a
+	// reasonable guess at e.g.
+	//      [<0>] vfs_read+0x9c/0x1a0
+	return strings.Contains(string(content), function+"+0x")
+}
+
+func childThreadsOfPid(pid int) []int {
+	// "children" doesn't exist in /proc/pid for some reason...
+	threadsRaw, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid))
+	if err != nil {
+		logrus.Errorf("couldn't read task dir for %d: %v", pid, err)
+		return nil
+	}
+
+	threads := []int{}
+	for _, e := range strings.Fields(string(threadsRaw)) {
+		tid, err := strconv.Atoi(e)
+		if err != nil {
+			logrus.Errorf("couldn't read task dir for %d: %v", pid, err)
+			return nil
+		}
+		threads = append(threads, tid)
+	}
+
+	return threads
 }
