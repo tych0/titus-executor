@@ -44,7 +44,7 @@ export iteration="--iteration ${ITERATION:-$(date +%s)}"
 # when on CI/Jenkins
 if [[ -n "${BUILD_NUMBER:-}" ]]; then
     last_tag=$(git describe --abbrev=0 --tags | sed 's/^[a-zA-Z]//')
-    export version="${last_tag}-h${BUILD_NUMBER}.${git_sha_short}"
+    export version="${last_tag}-h${BUILD_NUMBER}.${git_sha_short}-$iteration"
     unset iteration
 fi
 
