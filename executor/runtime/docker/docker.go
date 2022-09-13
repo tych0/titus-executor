@@ -128,7 +128,6 @@ type DockerRuntime struct { // nolint: golint
 	client            *docker.Client
 	tiniSocketDir     string
 	storageOptEnabled bool
-	pidCgroupPath     string
 	cfg               config.Config
 	dockerCfg         Config
 	defaultBindMounts []string
@@ -177,12 +176,6 @@ func NewDockerRuntime(ctx context.Context, m metrics.Reporter, dockerCfg Config,
 	defaultBindMounts := []string{}
 	defaultBindMounts = append(defaultBindMounts, filepath.Join(cfg.RuntimeDir, "pod.json")+":/titus/run/pod.json:ro")
 
-	pidCgroupPath, err := getOwnCgroup("pids")
-	if err != nil {
-		tracehelpers.SetStatus(err, span)
-		return nil, err
-	}
-
 	storageOptEnabled := shouldEnableStorageOpts(info)
 
 	runtimeFunc := func(ctx context.Context, c runtimeTypes.Container, startTime time.Time) (runtimeTypes.Runtime, error) {
@@ -190,7 +183,6 @@ func NewDockerRuntime(ctx context.Context, m metrics.Reporter, dockerCfg Config,
 		defer span.End()
 
 		dockerRuntime := &DockerRuntime{
-			pidCgroupPath:     pidCgroupPath,
 			metrics:           m,
 			registryAuthCfg:   nil, // we don't need registry authentication yet
 			client:            client,
@@ -425,10 +417,6 @@ func (r *DockerRuntime) mainContainerDockerConfig(c runtimeTypes.Container, bind
 		log.Infof("Setting up VolumesFrom from container %s", containerName)
 		hostCfg.VolumesFrom = append(hostCfg.VolumesFrom, fmt.Sprintf("%s:ro", containerName))
 	}
-	hostCfg.CgroupParent = r.pidCgroupPath
-	r.registerRuntimeCleanup(func() error {
-		return cleanupCgroups(r.pidCgroupPath)
-	})
 
 	hostCfg.PidsLimit = int64(r.dockerCfg.pidLimit)
 	hostCfg.Memory = c.Resources().Mem * MiB

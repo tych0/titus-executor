@@ -239,10 +239,6 @@ func startSystemdUnit(ctx context.Context, conn *dbus.Conn, taskID string, cID s
 	return nil
 }
 
-func getOwnCgroup(subsystem string) (string, error) {
-	return cgroups.GetOwnCgroup(subsystem)
-}
-
 func cleanupCgroups(cgroupPath string) error {
 	allCgroupMounts, err := cgroups.GetCgroupMounts(true)
 	if err != nil {

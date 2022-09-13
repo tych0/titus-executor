@@ -27,9 +27,6 @@ func (r *DockerRuntime) mountContainerProcPid1InTitusInits(parentCtx context.Con
 	return nil
 }
 
-func getOwnCgroup(subsystem string) (string, error) {
-	return "", nil
-}
 func cleanupCgroups(cgroupPath string) error {
 	return nil
 }
