@@ -130,7 +130,7 @@ func mainWithError(ctx context.Context, dockerCfg *docker.Config, cfg *config.Co
 		}
 		logger.G(ctx).WithField("endpoint", endpoint).WithField("url", mainCfg.zipkin).Info("Setting up tracing")
 		exporter := zipkin.NewExporter(reporter, endpoint)
-		ew = &exporterWrapper{exporter: exporter}
+		ew = &exporterWrapper{exporter: exporter, ctx: ctx}
 		trace.RegisterExporter(ew)
 		defer func() {
 			reporterErr := reporter.Close()
@@ -186,6 +186,7 @@ func mainWithError(ctx context.Context, dockerCfg *docker.Config, cfg *config.Co
 
 type exporterWrapper struct {
 	sync.RWMutex
+	ctx      context.Context
 	exporter *zipkin.Exporter
 	taskID   string
 }
@@ -199,5 +200,14 @@ func (e *exporterWrapper) ExportSpan(s *trace.SpanData) {
 		s.Attributes["taskid"] = e.taskID
 	}
 	e.RUnlock()
+	for _, me := range s.MessageEvents {
+		if me.CompressedByteSize > 1 * 1024 * 1024 {
+			// XXX: this necessarily is going to be large, should
+			// figure out how to render it to a string and take the
+			// first n bytes.
+			logger.G(e.ctx).Warnf("dropping span: %v", s)
+			return
+		}
+	}
 	e.exporter.ExportSpan(s)
 }

@@ -96,7 +96,7 @@ func stopSystemServices(ctx context.Context, c runtimeTypes.Container) error {
 	defer conn.Close()
 
 	target := fmt.Sprintf("titus-container@%s.target", c.TaskID())
-	_, err = conn.StopUnitContext(ctx, target, "fail", nil)
+	_, err := conn.StopUnitContext(ctx, target, "fail", nil)
 	if err != nil {
 		return fmt.Errorf("Could not stop target %q: %w", target, err)
 	}
