@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,6 +147,24 @@ func NewBackend(ctx context.Context, rp runtimeTypes.ContainerRuntimeProvider, p
 	if err != nil {
 		return nil, errors.New("error converting network resource units")
 	}
+
+	kernelVersion, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		kernelVersion = []byte(fmt.Sprintf("problem reading kernel version: %v", err))
+	}
+	pod.Annotations["netflix.version/linux-kernel"] = strings.TrimSpace(string(kernelVersion))
+
+	// this is actually kind of racy... if mutator runs and upgrades the
+	// package during the window between when this binary starts and this
+	// command runs, we'll render the wrong version. we could plumb through
+	// the version via golang's -ldflags -X, but we'll still have this
+	// problem if we start querying other package versions. best to do this
+	// as early as possible, I think.
+	executorVersion, err := exec.Command("dpkg-query", "--show", "--showformat=${Version}", "titus-executor").CombinedOutput()
+	if err != nil {
+		executorVersion = []byte(fmt.Sprintf("problem reading executor version: %v", err))
+	}
+	pod.Annotations["netflix.version/titus-executor"] = strings.TrimSpace(string(executorVersion))
 
 	be := &Backend{
 		network: network,
